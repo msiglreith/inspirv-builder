@@ -1,0 +1,11 @@
+[package]
+name = "inspirv-builder"
+version = "0.1.0"
+authors = ["msiglreith <msiglreith@users.noreply.github.com>"]
+
+[dependencies]
+inspirv = { path = "../inspirv", version = "0.1.0" }
+
+[[example]]
+name = "export"
+path = "example/main.rs"
