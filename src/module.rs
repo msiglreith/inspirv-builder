@@ -1,7 +1,7 @@
 
 use std::collections::{HashSet, HashMap};
 use std::collections::hash_map::Entry;
-use std::io::Write;
+use std::io::{Result, Write};
 use inspirv;
 use inspirv::module::{Header, Generator};
 use inspirv::types::{LiteralInteger, Id};
@@ -13,13 +13,13 @@ use function::{FuncId, Function};
 
 const INSPIRV_BUILDER_ID: u32 = 0xCC; // TODO: might be able to get an official value in the future (:?
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
     Void,
     Bool,
     Int(u32, bool), // bit-width, signed
     Float(u32), // bit-width, following IEEE 754 standard
-    Function,
+    Function(Box<Type>, Vec<Type>),
 }
 
 pub struct EntryPoint {
@@ -36,18 +36,19 @@ pub struct RawModule {
 }
 
 impl RawModule {
-    pub fn export_binary<W: Write>(&mut self, inner: W) {
+    pub fn export_binary<W: Write>(&mut self, inner: W) -> Result<()> {
         let mut writer = inspirv::write_binary::WriterBinary::new(inner);
-        writer.write_header(self.header);
+        try!(writer.write_header(self.header));
         for instr in &self.instructions {
-            writer.write_instruction(&instr);
+            try!(writer.write_instruction(&instr));
         }
+
+        Ok(())
     }
 }
 
 // Logical layout of a SPIR-V module (Specification 1.1, Section 2.4)
 pub struct ModuleBuilder {
-    capabilites: HashSet<Capability>,
     memory_model: (AddressingModel, MemoryModel),
     entry_points: Vec<EntryPoint>,
     func_decls: Vec<()>,
@@ -60,10 +61,9 @@ pub struct ModuleBuilder {
 impl ModuleBuilder {
     pub fn new() -> ModuleBuilder {
         ModuleBuilder {
-            capabilites: HashSet::new(),
             memory_model: (
                 AddressingModel::AddressingModelLogical,
-                MemoryModel::MemoryModelSimple, // TODO: requires `Shader` capability
+                MemoryModel::MemoryModelSimple,
             ),
             entry_points: Vec::new(),
             func_decls: Vec::new(),
@@ -75,28 +75,22 @@ impl ModuleBuilder {
     }
 
     // TODO:
-    pub fn build(&self) -> RawModule {
-        let mut instructions = Vec::new();
-
+    pub fn build(&mut self) -> RawModule {
+        // TODO: mid-high: generate capabilites from the instructions we generate below!
         // 1. All `OpCapability` instructions
-        for capability in &self.capabilites {
-            instructions.push(Instruction::Core(
-                core_instruction::Instruction::OpCapability(
-                    core_instruction::OpCapability(*capability)
-                )
-            ));
-        }
+        // NOTE: We retrieve all required capabilities from all the other instructions, so we delay this step
+        let capabilites: HashSet<Capability> = HashSet::new();
 
         // 2. Optional `OpExtension` instructions (extensions to SPIR-V)
 
         // 3. Optional `OpExtInstImport` instructions
 
         // 4. The single required `OpMemoryModel` instruction
-        instructions.push(Instruction::Core(
+        let instr_memory = Instruction::Core(
             core_instruction::Instruction::OpMemoryModel(
                 core_instruction::OpMemoryModel(self.memory_model.0, self.memory_model.1)
             )
-        ));
+        );
 
         // 5. All entry point declarations, using `OpEntryPoint`
 
@@ -112,56 +106,116 @@ impl ModuleBuilder {
 
         // 9. All type declarations (OpTypeXXX instructions), all constant instructions, and all global variable declarations (all
         //    OpVariable instructions whose Storage Class is not Function)
-        for (ty, id) in &self.types {
-            instructions.push(
-                match *ty {
-                    Type::Void => {
-                        Instruction::Core(
-                            core_instruction::Instruction::OpTypeVoid(
-                                core_instruction::OpTypeVoid(*id)
-                            )
-                        )
-                    },
-
-                    Type::Bool => {
-                        Instruction::Core(
-                            core_instruction::Instruction::OpTypeBool(
-                                core_instruction::OpTypeBool(*id)
-                            )
-                        )
-                    },
-
-                    Type::Int(bit_width, signed) => {
-                        Instruction::Core(
-                            core_instruction::Instruction::OpTypeInt(
-                                core_instruction::OpTypeInt(
-                                    *id,
-                                    LiteralInteger(bit_width),
-                                    LiteralInteger(signed as u32)
-                                )
-                            )
-                        )
-                    },
-
-                    Type::Float(bit_width) => {
-                        Instruction::Core(
-                            core_instruction::Instruction::OpTypeFloat(
-                                core_instruction::OpTypeFloat(*id, LiteralInteger(bit_width))
-                            )
-                        )
-                    },
-
-                    Type::Function => {
-                        unimplemented!()
-                    },
-                }
-            );
-        }
+        // NOTE: Type declarations are defined during the function building step, so we delay this step
 
         // 10. All function declarations ("declarations" are functions without a body; there is no forward declaration to a function
         //     with a body)
 
         // 11. All function definitions (functions with a body)
+        let mut instr_funcs = Vec::new();
+        for func in self.func_defs.clone() {
+            // Function begin
+            let ret_ty = self.define_type(&func.ret_ty);
+            let func_ty = self.define_type(&Type::Function(Box::new(func.ret_ty), func.params.clone()));
+
+            instr_funcs.push(
+                Instruction::Core(core_instruction::Instruction::OpFunction(
+                    core_instruction::OpFunction(ret_ty, func.id.0, func.control, func_ty)
+                ))
+            );
+
+            for parameter in func.params {
+                let id = self.define_type(&parameter);
+                let ty_id = self.define_type(&parameter);
+                instr_funcs.push(
+                    Instruction::Core(core_instruction::Instruction::OpFunctionParameter(
+                        core_instruction::OpFunctionParameter(ty_id, id)
+                    ))
+                );
+            }
+
+            // TODO: variables
+
+            for block in func.blocks {
+                // A block always starts with an `OpLabel` instruction
+                instr_funcs.push(
+                    Instruction::Core(core_instruction::Instruction::OpLabel(
+                        core_instruction::OpLabel(block.label)
+                    ))
+                );
+
+                instr_funcs.extend(block.instructions);
+
+                // A block always ends with a branch instruction
+                instr_funcs.push(Instruction::from(block.branch_instr.unwrap()));
+            }
+
+            // Function end
+            instr_funcs.push(
+                Instruction::Core(core_instruction::Instruction::OpFunctionEnd(
+                    core_instruction::OpFunctionEnd
+                ))
+            );
+        }
+
+        // Define all required types as SPIR-V instructions
+        let instr_types = self.types.iter().map(|(ty, id)| {
+            match ty.clone() {
+                Type::Void => {
+                    Instruction::Core(
+                        core_instruction::Instruction::OpTypeVoid(
+                            core_instruction::OpTypeVoid(*id)
+                        )
+                    )
+                },
+
+                Type::Bool => {
+                    Instruction::Core(
+                        core_instruction::Instruction::OpTypeBool(
+                            core_instruction::OpTypeBool(*id)
+                        )
+                    )
+                },
+
+                Type::Int(bit_width, signed) => {
+                    Instruction::Core(
+                        core_instruction::Instruction::OpTypeInt(
+                            core_instruction::OpTypeInt(
+                                *id,
+                                LiteralInteger(bit_width),
+                                LiteralInteger(signed as u32)
+                            )
+                        )
+                    )
+                },
+
+                Type::Float(bit_width) => {
+                    Instruction::Core(
+                        core_instruction::Instruction::OpTypeFloat(
+                            core_instruction::OpTypeFloat(*id, LiteralInteger(bit_width))
+                        )
+                    )
+                },
+
+                Type::Function(ret_ty, params) => {
+                    unimplemented!()
+                },
+            }
+        }).collect::<Vec<Instruction>>();
+
+        // TODO:
+        // Retrieve all required capabilites from the constructed instructions
+        let instr_capabilites = capabilites.iter().map(|capability| {
+                Instruction::Core(core_instruction::Instruction::OpCapability(
+                    core_instruction::OpCapability(*capability)
+                ))
+        }).collect::<Vec<Instruction>>();
+
+        // Merge everything together in correct order
+        let mut instructions = Vec::new();
+        instructions.extend(instr_capabilites);
+        instructions.push(instr_memory);
+        instructions.extend(instr_types);
 
         RawModule {
             header: Header {
@@ -174,8 +228,22 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn define_type(&mut self, ty: Type) -> Id {
-        let entry = self.types.entry(ty);
+    pub fn alloc_id(&mut self) -> Id {
+        let id = Id(self.cur_id);
+        self.cur_id += 1;
+        id
+    }
+
+    pub fn with_memory_model(&mut self, memory_model: MemoryModel) {
+        self.memory_model.1 = memory_model;
+    }
+
+    pub fn with_addressing_model(&mut self, addressing_model: AddressingModel) {
+        self.memory_model.0 = addressing_model;
+    }
+
+    pub fn define_type(&mut self, ty: &Type) -> Id {
+        let entry = self.types.entry(ty.clone());
         match entry {
             Entry::Vacant(e) => {
                 let id = Id(self.cur_id);
@@ -189,51 +257,51 @@ impl ModuleBuilder {
     }
 
     pub fn define_void(&mut self) -> Id {
-        self.define_type(Type::Void)
+        self.define_type(&Type::Void)
     }
 
     pub fn define_bool(&mut self) -> Id {
-        self.define_type(Type::Bool)
+        self.define_type(&Type::Bool)
     }
 
     pub fn define_u8(&mut self) -> Id {
-        self.define_type(Type::Int(8, false))
+        self.define_type(&Type::Int(8, false))
     }
 
     pub fn define_u16(&mut self) -> Id {
-        self.define_type(Type::Int(16, false))
+        self.define_type(&Type::Int(16, false))
     }
 
     pub fn define_u32(&mut self) -> Id {
-        self.define_type(Type::Int(32, false))
+        self.define_type(&Type::Int(32, false))
     }
 
     pub fn define_u64(&mut self) -> Id {
-        self.define_type(Type::Int(64, false))
+        self.define_type(&Type::Int(64, false))
     }
 
     pub fn define_i8(&mut self) -> Id {
-        self.define_type(Type::Int(8, true))
+        self.define_type(&Type::Int(8, true))
     }
 
     pub fn define_i16(&mut self) -> Id {
-        self.define_type(Type::Int(16, true))
+        self.define_type(&Type::Int(16, true))
     }
 
     pub fn define_i32(&mut self) -> Id {
-        self.define_type(Type::Int(32, true))
+        self.define_type(&Type::Int(32, true))
     }
 
     pub fn define_i64(&mut self) -> Id {
-        self.define_type(Type::Int(64, true))
+        self.define_type(&Type::Int(64, true))
     }
 
     pub fn define_f32(&mut self) -> Id {
-        self.define_type(Type::Float(32))
+        self.define_type(&Type::Float(32))
     }
 
     pub fn define_f64(&mut self) -> Id {
-        self.define_type(Type::Float(64))
+        self.define_type(&Type::Float(64))
     }
 
     // TODO: do we need function declarations at all?
@@ -241,7 +309,11 @@ impl ModuleBuilder {
         unimplemented!()
     }
 
-    pub fn define_function(&mut self) -> (FuncId, Function) {
+    pub fn define_function(&mut self) -> (FuncId, &mut Function) {
+        unimplemented!()
+    }
+
+    pub fn define_entry_point(&mut self) {
         unimplemented!()
     }
 }
