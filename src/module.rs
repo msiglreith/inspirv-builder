@@ -1,10 +1,12 @@
 
 use std::collections::{HashSet, HashMap};
 use std::collections::hash_map::Entry;
-use std::io::{Result, Write};
+use std::result;
+use std::io;
+use std::io::Write;
 use inspirv;
 use inspirv::module::{Header, Generator};
-use inspirv::types::{LiteralInteger, Id};
+use inspirv::types::{LiteralInteger, LiteralString, Id};
 use inspirv::instruction::{Instruction, InstructionExt};
 use inspirv::core::enumeration::*;
 use inspirv::core::instruction as core_instruction;
@@ -23,9 +25,7 @@ pub enum Type {
 }
 
 pub struct EntryPoint {
-    name: String,
-    execution_model: ExecutionModel,
-    execution_mode: ExecutionMode,
+    execution_modes: HashMap<ExecutionModeKind, ExecutionMode>,
     func_id: FuncId,
     // TODO: interfaces
 }
@@ -36,7 +36,7 @@ pub struct RawModule {
 }
 
 impl RawModule {
-    pub fn export_binary<W: Write>(&mut self, inner: W) -> Result<()> {
+    pub fn export_binary<W: Write>(&mut self, inner: W) -> io::Result<()> {
         let mut writer = inspirv::write_binary::WriterBinary::new(inner);
         try!(writer.write_header(self.header));
         for instr in &self.instructions {
@@ -50,7 +50,7 @@ impl RawModule {
 // Logical layout of a SPIR-V module (Specification 1.1, Section 2.4)
 pub struct ModuleBuilder {
     memory_model: (AddressingModel, MemoryModel),
-    entry_points: Vec<EntryPoint>,
+    entry_points: HashMap<(String, ExecutionModel), EntryPoint>,
     func_decls: Vec<()>,
     func_defs: Vec<Function>,
     types: HashMap<Type, Id>,
@@ -65,7 +65,7 @@ impl ModuleBuilder {
                 AddressingModel::AddressingModelLogical,
                 MemoryModel::MemoryModelSimple,
             ),
-            entry_points: Vec::new(),
+            entry_points: HashMap::new(),
             func_decls: Vec::new(),
             func_defs: Vec::new(),
             types: HashMap::new(),
@@ -76,7 +76,6 @@ impl ModuleBuilder {
 
     // TODO:
     pub fn build(&mut self) -> RawModule {
-        // TODO: mid-high: generate capabilites from the instructions we generate below!
         // 1. All `OpCapability` instructions
         // NOTE: We retrieve all required capabilities from all the other instructions, so we delay this step
 
@@ -92,6 +91,19 @@ impl ModuleBuilder {
         );
 
         // 5. All entry point declarations, using `OpEntryPoint`
+        let mut instr_entry = Vec::new();
+        for (name_model, entry_point) in &self.entry_points {
+            instr_entry.push(Instruction::Core(core_instruction::Instruction::OpEntryPoint(
+                core_instruction::OpEntryPoint(
+                    name_model.1,
+                    entry_point.func_id.0,
+                    LiteralString(name_model.0.clone()),
+                    Vec::new(), // TODO: interfaces
+                )
+            )));
+
+            // TODO: execution modes
+        }
 
         // 6. All execution mode declarations, using `OpExecutionMode`
 
@@ -209,17 +221,15 @@ impl ModuleBuilder {
                 },
             }
         }).collect::<Vec<Instruction>>();
-
-        // TODO:
-        // Retrieve all required capabilities from the constructed instructions
-        
-
+ 
         // Merge everything together in correct order except capabilities
         let mut instructions = Vec::new();
-        instructions.push(instr_memory);
-        instructions.extend(instr_types);
-        instructions.extend(instr_funcs);
+        instructions.push(instr_memory); // 4.
+        instructions.extend(instr_entry); // 5.
+        instructions.extend(instr_types); // 9.
+        instructions.extend(instr_funcs); // 11.
 
+        // Retrieve all required capabilities from the constructed instructions
         let mut capabilities = HashSet::new();
         for instr in &instructions {
             capabilities.extend(instr.capabilities());
@@ -272,60 +282,12 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn define_void(&mut self) -> Id {
-        self.define_type(&Type::Void)
-    }
-
-    pub fn define_bool(&mut self) -> Id {
-        self.define_type(&Type::Bool)
-    }
-
-    pub fn define_u8(&mut self) -> Id {
-        self.define_type(&Type::Int(8, false))
-    }
-
-    pub fn define_u16(&mut self) -> Id {
-        self.define_type(&Type::Int(16, false))
-    }
-
-    pub fn define_u32(&mut self) -> Id {
-        self.define_type(&Type::Int(32, false))
-    }
-
-    pub fn define_u64(&mut self) -> Id {
-        self.define_type(&Type::Int(64, false))
-    }
-
-    pub fn define_i8(&mut self) -> Id {
-        self.define_type(&Type::Int(8, true))
-    }
-
-    pub fn define_i16(&mut self) -> Id {
-        self.define_type(&Type::Int(16, true))
-    }
-
-    pub fn define_i32(&mut self) -> Id {
-        self.define_type(&Type::Int(32, true))
-    }
-
-    pub fn define_i64(&mut self) -> Id {
-        self.define_type(&Type::Int(64, true))
-    }
-
-    pub fn define_f32(&mut self) -> Id {
-        self.define_type(&Type::Float(32))
-    }
-
-    pub fn define_f64(&mut self) -> Id {
-        self.define_type(&Type::Float(64))
-    }
-
     // TODO: do we need function declarations at all?
     pub fn declare_function(&mut self, name: &str, ) -> FuncId {
         unimplemented!()
     }
 
-    // TODO: interface
+    // TODO: interfaces
     pub fn define_function(&mut self) -> Function {
         let id = FuncId(self.alloc_id());
         Function {
@@ -342,7 +304,29 @@ impl ModuleBuilder {
         self.func_defs.push(func);
     }
 
-    pub fn define_entry_point(&mut self) {
-        unimplemented!()
+    pub fn define_entry_point(
+        &mut self,
+        name: &str,
+        execution_model: ExecutionModel,
+        execution_modes: HashMap<ExecutionModeKind, ExecutionMode>
+    ) -> result::Result<Function, BuilderError> {
+        let function = self.define_function();
+        let entry_point = EntryPoint {
+            execution_modes: execution_modes,
+            func_id: function.id,
+        };
+
+        if self.entry_points.contains_key(&(name.to_string(), execution_model)) {
+            return Err(BuilderError::EntryPointAlreadyDefined(name.to_string(), execution_model));
+        }
+
+        self.entry_points.insert((name.to_string(), execution_model), entry_point);
+        Ok(function)
     }
+}
+
+// https://doc.rust-lang.org/book/error-handling.html#composing-custom-error-types
+#[derive(Debug)]
+pub enum BuilderError {
+    EntryPointAlreadyDefined(String, ExecutionModel),
 }
