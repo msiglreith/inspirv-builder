@@ -158,7 +158,7 @@ impl ModuleBuilder {
         }
 
         // Define all required types as SPIR-V instructions
-        let instr_types = self.types.iter().map(|(ty, id)| {
+        let instr_types = self.types.clone().iter().map(|(ty, id)| {
             match ty.clone() {
                 Type::Void => {
                     Instruction::Core(
@@ -197,7 +197,15 @@ impl ModuleBuilder {
                 },
 
                 Type::Function(ret_ty, params) => {
-                    unimplemented!()
+                    Instruction::Core(
+                        core_instruction::Instruction::OpTypeFunction(
+                            core_instruction::OpTypeFunction(
+                                *id,
+                                self.define_type(&ret_ty),
+                                params.iter().map(|ty| { self.define_type(ty) }).collect::<Vec<Id>>(),
+                            )
+                        )
+                    )
                 },
             }
         }).collect::<Vec<Instruction>>();
@@ -210,6 +218,7 @@ impl ModuleBuilder {
         let mut instructions = Vec::new();
         instructions.push(instr_memory);
         instructions.extend(instr_types);
+        instructions.extend(instr_funcs);
 
         let mut capabilities = HashSet::new();
         for instr in &instructions {
@@ -220,8 +229,6 @@ impl ModuleBuilder {
                     core_instruction::OpCapability(*capability)
                 ))
         }).collect::<Vec<Instruction>>();
-
-        println!("{:?}", capabilities);
 
         instr_capabilites.extend(instructions);
         let instructions = instr_capabilites;
