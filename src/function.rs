@@ -16,7 +16,7 @@ pub struct FunctionDecl {
 pub struct Block {
     pub label: Id,
     pub branch_instr: Option<BranchInstruction>, // needs to be set on build
-    pub instructions: Vec<Instruction>,
+    pub instructions: Vec<Instruction>, // some checks to avoid illegal instructions might be interesting for the future
 }
 
 #[derive(Clone, Debug)]

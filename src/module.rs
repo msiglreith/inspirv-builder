@@ -5,7 +5,7 @@ use std::io::{Result, Write};
 use inspirv;
 use inspirv::module::{Header, Generator};
 use inspirv::types::{LiteralInteger, Id};
-use inspirv::instruction::Instruction;
+use inspirv::instruction::{Instruction, InstructionExt};
 use inspirv::core::enumeration::*;
 use inspirv::core::instruction as core_instruction;
 
@@ -26,7 +26,7 @@ pub struct EntryPoint {
     name: String,
     execution_model: ExecutionModel,
     execution_mode: ExecutionMode,
-    // TODO: function id
+    func_id: FuncId,
     // TODO: interfaces
 }
 
@@ -79,7 +79,6 @@ impl ModuleBuilder {
         // TODO: mid-high: generate capabilites from the instructions we generate below!
         // 1. All `OpCapability` instructions
         // NOTE: We retrieve all required capabilities from all the other instructions, so we delay this step
-        let capabilites: HashSet<Capability> = HashSet::new();
 
         // 2. Optional `OpExtension` instructions (extensions to SPIR-V)
 
@@ -135,7 +134,7 @@ impl ModuleBuilder {
             }
 
             // TODO: variables
-
+            
             for block in func.blocks {
                 // A block always starts with an `OpLabel` instruction
                 instr_funcs.push(
@@ -204,18 +203,28 @@ impl ModuleBuilder {
         }).collect::<Vec<Instruction>>();
 
         // TODO:
-        // Retrieve all required capabilites from the constructed instructions
-        let instr_capabilites = capabilites.iter().map(|capability| {
+        // Retrieve all required capabilities from the constructed instructions
+        
+
+        // Merge everything together in correct order except capabilities
+        let mut instructions = Vec::new();
+        instructions.push(instr_memory);
+        instructions.extend(instr_types);
+
+        let mut capabilities = HashSet::new();
+        for instr in &instructions {
+            capabilities.extend(instr.capabilities());
+        }
+        let mut instr_capabilites = capabilities.iter().map(|capability| {
                 Instruction::Core(core_instruction::Instruction::OpCapability(
                     core_instruction::OpCapability(*capability)
                 ))
         }).collect::<Vec<Instruction>>();
 
-        // Merge everything together in correct order
-        let mut instructions = Vec::new();
-        instructions.extend(instr_capabilites);
-        instructions.push(instr_memory);
-        instructions.extend(instr_types);
+        println!("{:?}", capabilities);
+
+        instr_capabilites.extend(instructions);
+        let instructions = instr_capabilites;
 
         RawModule {
             header: Header {
@@ -309,8 +318,21 @@ impl ModuleBuilder {
         unimplemented!()
     }
 
-    pub fn define_function(&mut self) -> (FuncId, &mut Function) {
-        unimplemented!()
+    // TODO: interface
+    pub fn define_function(&mut self) -> Function {
+        let id = FuncId(self.alloc_id());
+        Function {
+            id: id,
+            params: Vec::new(),
+            ret_ty: Type::Void,
+            variables: Vec::new(),
+            control: FunctionControlNone,
+            blocks: Vec::new(),
+        }
+    }
+
+    pub fn push_function(&mut self, func: Function) {
+        self.func_defs.push(func);
     }
 
     pub fn define_entry_point(&mut self) {
