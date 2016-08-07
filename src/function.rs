@@ -8,8 +8,8 @@ use module::Type;
 pub struct FuncId(pub Id);
 
 pub struct FunctionDecl {
-    pub params: Vec<()>,
-    pub ret_ty: (),
+    pub params: Vec<Type>,
+    pub ret_ty: Type,
 }
 
 #[derive(Clone, Debug)]
@@ -20,11 +20,30 @@ pub struct Block {
 }
 
 #[derive(Clone, Debug)]
+pub struct LocalVar {
+    pub id: Id,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug)]
+pub struct Argument {
+    pub id: Id,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug)]
+pub struct Interface {
+    pub id: Id,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug)]
 pub struct Function {
     pub id: FuncId,
-    pub params: Vec<Type>,
+    pub params: Vec<Argument>,
     pub ret_ty: Type,
-    pub variables: Vec<()>,
+    pub interfaces: Vec<Interface>,
+    pub variables: Vec<LocalVar>,
     pub control: FunctionControl,
     pub blocks: Vec<Block>,
 }
