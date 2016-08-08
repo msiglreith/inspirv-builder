@@ -10,7 +10,7 @@ use inspirv::types::{LiteralInteger, LiteralString, Id};
 use inspirv::instruction::{Instruction, InstructionExt};
 use inspirv::core::enumeration::*;
 use inspirv::core::instruction as core_instruction;
-
+use linked_hash_map::LinkedHashMap;
 use function::{FuncId, Function};
 
 const INSPIRV_BUILDER_ID: u32 = 0xCC; // TODO: might be able to get an official value in the future (:?
@@ -25,6 +25,7 @@ pub enum Type {
     Array(Box<Type>),
     FixedArray(Box<Type>, u32),
     Pointer(Box<Type>, StorageClass),
+    Vector(Box<Type>, u32),
 }
 
 #[derive(Clone, Debug)]
@@ -72,7 +73,7 @@ pub struct ModuleBuilder {
     entry_points: HashMap<(String, ExecutionModel), EntryPoint>,
     func_decls: Vec<()>,
     func_defs: Vec<Function>,
-    types: HashMap<Type, Id>,
+    types: LinkedHashMap<Type, Id>,
     global_vars: HashMap<(String, StorageClass), Variable>,
 
     // debug annotations
@@ -93,14 +94,14 @@ impl ModuleBuilder {
             entry_points: HashMap::new(),
             func_decls: Vec::new(),
             func_defs: Vec::new(),
-            types: HashMap::new(),
+            types: LinkedHashMap::new(),
             global_vars: HashMap::new(),
 
             source: None,
             id_names: HashMap::new(),
             member_names: HashMap::new(),
 
-            cur_id: 0,
+            cur_id: 1,
         }
     }
 
@@ -193,7 +194,7 @@ impl ModuleBuilder {
             let ty_id = self.define_type(&Type::Pointer(Box::new(var.ty), storage));
             instr_global_vars.push(
                 Instruction::Core(core_instruction::Instruction::OpVariable(
-                    core_instruction::OpVariable(var.id, ty_id, storage, None)
+                    core_instruction::OpVariable(ty_id, var.id, storage, None)
                 ))
             );
         }
@@ -241,7 +242,7 @@ impl ModuleBuilder {
                     let ty_id = self.define_type(&Type::Pointer(Box::new(var.ty), StorageClass::StorageClassFunction));
                     instr_funcs.push(
                         Instruction::Core(core_instruction::Instruction::OpVariable(
-                            core_instruction::OpVariable(var.id, ty_id, StorageClass::StorageClassFunction, None)
+                            core_instruction::OpVariable(ty_id, var.id, StorageClass::StorageClassFunction, None)
                         ))
                     );
                 }
@@ -365,6 +366,27 @@ impl ModuleBuilder {
                         )
                     ));
                 }
+
+                Type::Vector(ty, len) => {
+                    if len < 2 {
+                        return Err(BuilderError::InvalidVectorComponentCount(len));
+                    }
+
+                    match *ty {
+                        Type::Bool | Type::Int(..) | Type::Float(..) => (),
+                        _ => return Err(BuilderError::NonScalarVectorType(*ty)),
+                    }
+
+                    instr_types.push(Instruction::Core(
+                        core_instruction::Instruction::OpTypeVector(
+                            core_instruction::OpTypeVector(
+                                id,
+                                self.define_type(&*ty),
+                                LiteralInteger(len),
+                            )
+                        )
+                    ));
+                }
             }
         }
  
@@ -374,6 +396,7 @@ impl ModuleBuilder {
         instructions.extend(instr_entry); // 5./6.
         instructions.extend(instr_debug); // 7.
         instructions.extend(instr_types); // 9.
+        instructions.extend(instr_global_vars); // 9.
         instructions.extend(instr_funcs); // 11.
 
         // Retrieve all required capabilities from the constructed instructions
@@ -430,17 +453,30 @@ impl ModuleBuilder {
     }
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
-        let entry = self.types.entry(ty.clone());
-        match entry {
-            Entry::Vacant(e) => {
-                let id = Id(self.cur_id);
-                self.cur_id += 1;
-                e.insert(id);
-                id
+        // TODO: high:
+        match ty {
+            &Type::Pointer(ref ty, _) => {
+                self.define_type(&*ty);
             },
 
-            Entry::Occupied(e) => { *e.get() },
+            &Type::Function(ref ret_ty, ref params) => {
+                self.define_type(&ret_ty);
+                for ty in params {
+                    self.define_type(&ty);
+                }
+            },
+
+            _ => (),
         }
+
+        if let Some(id) = self.types.get(ty) {
+            return *id;
+        }
+
+        let id = Id(self.cur_id);
+        self.cur_id += 1;
+        self.types.insert(ty.clone(), id);
+        id
     }
 
     pub fn define_named_type(&mut self, ty: &Type, name: &str) -> Id {
@@ -535,4 +571,6 @@ pub enum BuilderError {
     BlocklessFunction,
     EntryPointAlreadyDefined(String, ExecutionModel),
     GlobalFunctionVariable,
+    NonScalarVectorType(Type),
+    InvalidVectorComponentCount(u32),
 }
