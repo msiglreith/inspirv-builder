@@ -1,4 +1,5 @@
 
+use std::mem::transmute;
 use std::collections::{HashSet, HashMap};
 use std::collections::hash_map::Entry;
 use std::result;
@@ -26,14 +27,34 @@ pub enum Type {
     FixedArray(Box<Type>, u32),
     Pointer(Box<Type>, StorageClass),
     Vector(Box<Type>, u32),
+    Struct(Vec<Type>),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum ConstValue {
+    Bool(bool),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    Isize(i32),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    Usize(u32),
 }
 
 #[derive(Clone, Debug)]
-pub enum ConstValue {
-    Bool(bool),
-    Int(i64), // NOTE: could be more abstract like a `BigInt` but a `i64` is for the moment totally fine
-    Uint(u64),
-    Float(f64),
+pub enum ConstValueFloat {
+    F32(f32),
+    F64(f64),
+}
+
+#[derive(Clone, Debug)]
+pub enum Constant {
+    Scalar(ConstValue),
+    Float(ConstValueFloat),
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +96,8 @@ pub struct ModuleBuilder {
     func_defs: Vec<Function>,
     types: LinkedHashMap<Type, Id>,
     global_vars: HashMap<(String, StorageClass), Variable>,
+    consts: HashMap<ConstValue, Id>,
+    consts_float: Vec<(ConstValueFloat, Id)>, // floats doesn't support Eq/Hash /shrug
 
     // debug annotations
     source: Option<(SourceLanguage, LiteralInteger)>,
@@ -96,6 +119,8 @@ impl ModuleBuilder {
             func_defs: Vec::new(),
             types: LinkedHashMap::new(),
             global_vars: HashMap::new(),
+            consts: HashMap::new(),
+            consts_float: Vec::new(),
 
             source: None,
             id_names: HashMap::new(),
@@ -184,6 +209,134 @@ impl ModuleBuilder {
         // 9. All type declarations (OpTypeXXX instructions), all constant instructions, and all global variable declarations (all
         //    OpVariable instructions whose Storage Class is not Function)
         // NOTE: Type declarations are defined during the function building step, so we delay this step
+        let mut instr_consts = Vec::new();
+        for (const_val, id) in self.consts.clone() {
+            match const_val {
+                ConstValue::Bool(true) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstantTrue(
+                            core_instruction::OpConstantTrue(self.define_type(&Type::Bool), id)
+                        ))
+                    );
+                },
+                ConstValue::Bool(false) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstantFalse(
+                            core_instruction::OpConstantFalse(self.define_type(&Type::Bool), id)
+                        ))
+                    );
+                },
+                ConstValue::I8(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(8, true)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::I16(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(16, true)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::I32(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(32, true)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::I64(v) => {
+                    let v: u64 = unsafe { transmute(v) }; // TODO: low: Is this transmute needed? Not totally sure
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(64, true)), id,
+                                vec![
+                                    LiteralInteger((v & 0xFFFF) as u32),
+                                    LiteralInteger(((v >> 32) & 0xFFFF) as u32),
+                                ]
+                            )
+                        ))
+                    )
+                },
+                ConstValue::Isize(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(32, true)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::U8(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(8, false)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::U16(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(16, false)), id, vec![LiteralInteger(v as u32)])
+                        ))
+                    );
+                },
+                ConstValue::U32(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(32, false)), id, vec![LiteralInteger(v)])
+                        ))
+                    );
+                },
+                ConstValue::U64(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(64, false)), id,
+                                vec![
+                                    LiteralInteger((v & 0xFFFF) as u32),
+                                    LiteralInteger(((v >> 32) & 0xFFFF) as u32),
+                                ]
+                            )
+                        ))
+                    );
+                },
+                ConstValue::Usize(v) => {
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Int(32, false)), id, vec![LiteralInteger(v)])
+                        ))
+                    );
+                },
+            }
+        }
+        for (const_val, id) in self.consts_float.clone() {
+            match const_val {
+                ConstValueFloat::F32(v) => {
+                    let v: u32 = unsafe { transmute(v) };
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(
+                                &Type::Float(32)), id, vec![LiteralInteger(v)]
+                            )
+                        ))
+                    )
+                },
+                ConstValueFloat::F64(v) => {
+                    let v: u64 = unsafe { transmute(v) };
+                    instr_consts.push(
+                        Instruction::Core(core_instruction::Instruction::OpConstant(
+                            core_instruction::OpConstant(self.define_type(&Type::Float(64)), id,
+                                vec![
+                                    LiteralInteger((v & 0xFFFF) as u32),
+                                    LiteralInteger(((v >> 32) & 0xFFFF) as u32),
+                                ]
+                            )
+                        ))
+                    )
+                },
+            }
+        }
+
         let mut instr_global_vars = Vec::new();
         for (name_storage, var) in self.global_vars.clone() {
             let storage = name_storage.1;
@@ -277,6 +430,7 @@ impl ModuleBuilder {
         }
 
         // Define all required types as SPIR-V instructions
+        // Shouldn't define acutal new types in the builder, only construct the corresponding instructions
         let mut instr_types = Vec::new();
         for (ty, id) in self.types.clone() {
             match ty {
@@ -349,7 +503,7 @@ impl ModuleBuilder {
                             core_instruction::OpTypeArray(
                                 id,
                                 self.define_type(&ty),
-                                self.define_constant(Type::Int(32, false), ConstValue::Uint(len as u64)),
+                                self.define_constant(Constant::Scalar(ConstValue::U32(len))),
                             )
                         )
                     ));
@@ -387,6 +541,15 @@ impl ModuleBuilder {
                         )
                     ));
                 }
+
+                Type::Struct(tys) => {
+                    let component_ids = tys.iter().map(|ty| self.define_type(ty)).collect();
+                    instr_types.push(Instruction::Core(
+                        core_instruction::Instruction::OpTypeStruct(
+                            core_instruction::OpTypeStruct(id, component_ids)
+                        )
+                    ));
+                }
             }
         }
  
@@ -396,6 +559,7 @@ impl ModuleBuilder {
         instructions.extend(instr_entry); // 5./6.
         instructions.extend(instr_debug); // 7.
         instructions.extend(instr_types); // 9.
+        instructions.extend(instr_consts); // 9.
         instructions.extend(instr_global_vars); // 9.
         instructions.extend(instr_funcs); // 11.
 
@@ -443,17 +607,11 @@ impl ModuleBuilder {
     }
 
     pub fn name_id(&mut self, id: Id, name: &str) {
-        {
-            if !self.id_names.contains_key(&id) {
-                println!("{:?}", (id, name));
-            }
-            
-        }
         self.id_names.entry(id).or_insert(name.to_string());
     }
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
-        // TODO: high:
+        // Ensure that subtypes of aggregate types are defined BEFORE the actual aggregate type definition
         match ty {
             &Type::Pointer(ref ty, _) => {
                 self.define_type(&*ty);
@@ -464,6 +622,16 @@ impl ModuleBuilder {
                 for ty in params {
                     self.define_type(&ty);
                 }
+            },
+
+            &Type::Struct(ref tys) => {
+                for ty in tys {
+                    self.define_type(&ty);
+                }
+            },
+
+            &Type::Vector(ref ty, _) => {
+                self.define_type(&*ty);
             },
 
             _ => (),
@@ -485,9 +653,28 @@ impl ModuleBuilder {
         id
     }
 
-    // TODO: Not totally happy with this function atm as it's pretty unsafe
-    pub fn define_constant(&mut self, ty: Type, constant: ConstValue) -> Id {
-        unimplemented!()
+    pub fn define_constant(&mut self, constant: Constant) -> Id {
+        match constant {
+            Constant::Scalar(c) => {
+                let entry = self.consts.entry(c);
+                match entry {
+                    Entry::Vacant(e) => {
+                        let id = Id(self.cur_id);
+                        self.cur_id += 1;
+                        e.insert(id);
+                        id
+                    },
+
+                    Entry::Occupied(e) => { *e.get()},
+                }
+            }
+            Constant::Float(c) => {
+                let id = self.alloc_id();
+                self.consts_float.push((c, id));
+                id
+            },
+        }
+        
     }
 
     // TODO: do we need function declarations at all?
