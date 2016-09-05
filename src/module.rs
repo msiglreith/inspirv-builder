@@ -104,6 +104,8 @@ pub struct ModuleBuilder {
     id_names: HashMap<Id, String>,
     member_names: HashMap<(Id, u32), String>,
 
+    decorations: Vec<Instruction>,
+
     cur_id: u32,
 }
 
@@ -125,6 +127,8 @@ impl ModuleBuilder {
             source: None,
             id_names: HashMap::new(),
             member_names: HashMap::new(),
+
+            decorations: Vec::new(),
 
             cur_id: 1,
         }
@@ -558,6 +562,7 @@ impl ModuleBuilder {
         instructions.push(instr_memory); // 4.
         instructions.extend(instr_entry); // 5./6.
         instructions.extend(instr_debug); // 7.
+        instructions.extend(self.decorations.clone()); // 8.
         instructions.extend(instr_types); // 9.
         instructions.extend(instr_consts); // 9.
         instructions.extend(instr_global_vars); // 9.
@@ -608,6 +613,17 @@ impl ModuleBuilder {
 
     pub fn name_id(&mut self, id: Id, name: &str) {
         self.id_names.entry(id).or_insert(name.to_string());
+    }
+
+    pub fn add_decoration(&mut self, id: Id, decoration: Decoration) {
+        self.decorations.push(Instruction::Core(
+            core_instruction::Instruction::OpDecorate(
+                core_instruction::OpDecorate(
+                    id,
+                    decoration,
+                )
+            )
+        ));
     }
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
