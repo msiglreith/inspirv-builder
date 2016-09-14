@@ -55,6 +55,7 @@ pub enum ConstValueFloat {
 pub enum Constant {
     Scalar(ConstValue),
     Float(ConstValueFloat),
+    Composite(Type, Vec<Id>),
 }
 
 #[derive(Clone, Debug)]
@@ -98,13 +99,14 @@ pub struct ModuleBuilder {
     global_vars: HashMap<(String, StorageClass), Variable>,
     consts: HashMap<ConstValue, Id>,
     consts_float: Vec<(ConstValueFloat, Id)>, // floats doesn't support Eq/Hash /shrug
+    consts_composite: HashMap<(Type, Vec<Id>), Id>,
 
     // debug annotations
     source: Option<(SourceLanguage, LiteralInteger)>,
     id_names: HashMap<Id, String>,
     member_names: HashMap<(Id, u32), String>,
 
-    decorations: Vec<Instruction>,
+    decorations: HashSet<(Id, Decoration)>,
 
     cur_id: u32,
 }
@@ -116,19 +118,18 @@ impl ModuleBuilder {
                 AddressingModel::AddressingModelLogical,
                 MemoryModel::MemoryModelSimple,
             ),
-            entry_points: HashMap::new(),
-            func_decls: Vec::new(),
-            func_defs: Vec::new(),
-            types: LinkedHashMap::new(),
-            global_vars: HashMap::new(),
-            consts: HashMap::new(),
-            consts_float: Vec::new(),
-
+            entry_points: Default::default(),
+            func_decls: Default::default(),
+            func_defs: Default::default(),
+            types: Default::default(),
+            global_vars: Default::default(),
+            consts: Default::default(),
+            consts_float: Default::default(),
+            consts_composite: Default::default(),
             source: None,
-            id_names: HashMap::new(),
-            member_names: HashMap::new(),
-
-            decorations: Vec::new(),
+            id_names: Default::default(),
+            member_names: Default::default(),
+            decorations: Default::default(),
 
             cur_id: 1,
         }
@@ -209,6 +210,15 @@ impl ModuleBuilder {
         // 8. All annotation instructionsa:
         //      a. all decoration instructions (OpDecorate, OpMemberDecorate, OpGroupDecorate, OpGroupMemberDecorate,
         //         and OpDecorationGroup)
+        let mut instr_annotation = Vec::new();
+        for &(id, ref decoration) in &self.decorations {
+            instr_annotation.push(
+                core_instruction::OpDecorate(
+                    id,
+                    decoration.clone(),
+                ).into()
+            );
+        }
 
         // 9. All type declarations (OpTypeXXX instructions), all constant instructions, and all global variable declarations (all
         //    OpVariable instructions whose Storage Class is not Function)
@@ -318,27 +328,34 @@ impl ModuleBuilder {
                 ConstValueFloat::F32(v) => {
                     let v: u32 = unsafe { transmute(v) };
                     instr_consts.push(
-                        Instruction::Core(core_instruction::Instruction::OpConstant(
-                            core_instruction::OpConstant(self.define_type(
-                                &Type::Float(32)), id, vec![LiteralInteger(v)]
-                            )
-                        ))
+                        core_instruction::OpConstant(
+                            self.define_type(&Type::Float(32)),
+                            id,
+                            vec![LiteralInteger(v)],
+                        ).into()
                     )
                 },
                 ConstValueFloat::F64(v) => {
                     let v: u64 = unsafe { transmute(v) };
                     instr_consts.push(
-                        Instruction::Core(core_instruction::Instruction::OpConstant(
-                            core_instruction::OpConstant(self.define_type(&Type::Float(64)), id,
-                                vec![
-                                    LiteralInteger((v & 0xFFFF) as u32),
-                                    LiteralInteger(((v >> 32) & 0xFFFF) as u32),
-                                ]
-                            )
-                        ))
+                        core_instruction::OpConstant(self.define_type(&Type::Float(64)), id,
+                            vec![
+                                LiteralInteger((v & 0xFFFF) as u32),
+                                LiteralInteger(((v >> 32) & 0xFFFF) as u32),
+                            ]
+                        ).into()
                     )
                 },
             }
+        }
+        for ((ty, const_vals), id) in self.consts_composite.clone() {
+            instr_consts.push(
+                core_instruction::OpConstantComposite(
+                    self.define_type(&ty),
+                    id,
+                    const_vals,
+                ).into()
+            )
         }
 
         let mut instr_global_vars = Vec::new();
@@ -562,7 +579,7 @@ impl ModuleBuilder {
         instructions.push(instr_memory); // 4.
         instructions.extend(instr_entry); // 5./6.
         instructions.extend(instr_debug); // 7.
-        instructions.extend(self.decorations.clone()); // 8.
+        instructions.extend(instr_annotation); // 8.
         instructions.extend(instr_types); // 9.
         instructions.extend(instr_consts); // 9.
         instructions.extend(instr_global_vars); // 9.
@@ -616,14 +633,7 @@ impl ModuleBuilder {
     }
 
     pub fn add_decoration(&mut self, id: Id, decoration: Decoration) {
-        self.decorations.push(Instruction::Core(
-            core_instruction::Instruction::OpDecorate(
-                core_instruction::OpDecorate(
-                    id,
-                    decoration,
-                )
-            )
-        ));
+        self.decorations.insert((id, decoration));
     }
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
@@ -681,13 +691,26 @@ impl ModuleBuilder {
                         id
                     },
 
-                    Entry::Occupied(e) => { *e.get()},
+                    Entry::Occupied(e) => { *e.get() },
                 }
             }
             Constant::Float(c) => {
                 let id = self.alloc_id();
                 self.consts_float.push((c, id));
                 id
+            },
+            Constant::Composite(ty, consts) => {
+                let entry = self.consts_composite.entry((ty, consts));
+                match entry {
+                    Entry::Vacant(e) => {
+                        let id = Id(self.cur_id);
+                        self.cur_id += 1;
+                        e.insert(id);
+                        id
+                    },
+
+                    Entry::Occupied(e) => { *e.get() },
+                }
             },
         }
         
