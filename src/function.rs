@@ -19,6 +19,12 @@ pub struct Block {
     pub instructions: Vec<Instruction>, // some checks to avoid illegal instructions might be interesting for the future
 }
 
+impl Block {
+    pub fn emit_instruction<T: Into<Instruction>>(&mut self, instruction: T) {
+        self.instructions.push(instruction.into());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LocalVar {
     pub id: Id,
