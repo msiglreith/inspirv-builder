@@ -33,12 +33,10 @@ pub enum Type {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ConstValue {
     Bool(bool),
-    I8(i8),
     I16(i16),
     I32(i32),
     I64(i64),
     Isize(i32),
-    U8(u8),
     U16(u16),
     U32(u32),
     U64(u64),
@@ -139,6 +137,7 @@ impl ModuleBuilder {
     pub fn build(&mut self) -> Result<RawModule, BuilderError> {
         // 1. All `OpCapability` instructions
         // NOTE: We retrieve all required capabilities from all the other instructions, so we delay this step
+        let mut capabilities = HashSet::new();
 
         // 2. Optional `OpExtension` instructions (extensions to SPIR-V)
 
@@ -240,13 +239,6 @@ impl ModuleBuilder {
                         ))
                     );
                 },
-                ConstValue::I8(v) => {
-                    instr_consts.push(
-                        Instruction::Core(core_instruction::Instruction::OpConstant(
-                            core_instruction::OpConstant(self.define_type(&Type::Int(8, true)), id, vec![LiteralInteger(v as u32)])
-                        ))
-                    );
-                },
                 ConstValue::I16(v) => {
                     instr_consts.push(
                         Instruction::Core(core_instruction::Instruction::OpConstant(
@@ -278,13 +270,6 @@ impl ModuleBuilder {
                     instr_consts.push(
                         Instruction::Core(core_instruction::Instruction::OpConstant(
                             core_instruction::OpConstant(self.define_type(&Type::Int(32, true)), id, vec![LiteralInteger(v as u32)])
-                        ))
-                    );
-                },
-                ConstValue::U8(v) => {
-                    instr_consts.push(
-                        Instruction::Core(core_instruction::Instruction::OpConstant(
-                            core_instruction::OpConstant(self.define_type(&Type::Int(8, false)), id, vec![LiteralInteger(v as u32)])
                         ))
                     );
                 },
@@ -472,6 +457,12 @@ impl ModuleBuilder {
                 },
 
                 Type::Int(bit_width, signed) => {
+                    match bit_width {
+                        16 => { capabilities.insert(Capability::CapabilityInt16); }
+                        64 => { capabilities.insert(Capability::CapabilityInt64); }
+                        _  => (),
+                    }
+
                     instr_types.push(Instruction::Core(
                         core_instruction::Instruction::OpTypeInt(
                             core_instruction::OpTypeInt(
@@ -484,6 +475,11 @@ impl ModuleBuilder {
                 },
 
                 Type::Float(bit_width) => {
+                    match bit_width {
+                        16 => { capabilities.insert(Capability::CapabilityFloat16); }
+                        64 => { capabilities.insert(Capability::CapabilityFloat64); }
+                        _  => (),
+                    }
                     instr_types.push(Instruction::Core(
                         core_instruction::Instruction::OpTypeFloat(
                             core_instruction::OpTypeFloat(id, LiteralInteger(bit_width))
@@ -583,10 +579,9 @@ impl ModuleBuilder {
         instructions.extend(instr_types); // 9.
         instructions.extend(instr_consts); // 9.
         instructions.extend(instr_global_vars); // 9.
-        instructions.extend(instr_funcs); // 11.
+        instructions.extend(instr_funcs); // 11. 
 
         // Retrieve all required capabilities from the constructed instructions
-        let mut capabilities = HashSet::new();
         for instr in &instructions {
             capabilities.extend(instr.capabilities());
         }
