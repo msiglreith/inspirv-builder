@@ -26,7 +26,8 @@ pub enum Type {
     Array(Box<Type>),
     FixedArray(Box<Type>, u32),
     Pointer(Box<Type>, StorageClass),
-    Vector(Box<Type>, u32),
+    Vector{ base: Box<Type>, components: u32},
+    Matrix{ base: Box<Type>, rows: u32, cols: u32 },
     Struct(Vec<Type>),
 }
 
@@ -538,25 +539,44 @@ impl ModuleBuilder {
                     ));
                 }
 
-                Type::Vector(ty, len) => {
-                    if len < 2 {
-                        return Err(BuilderError::InvalidVectorComponentCount(len));
+                Type::Vector{base, components} => {
+                    if components < 2 {
+                        return Err(BuilderError::InvalidVectorComponentCount(components));
                     }
 
-                    match *ty {
-                        Type::Bool | Type::Int(..) | Type::Float(..) => (),
-                        _ => return Err(BuilderError::NonScalarVectorType(*ty)),
+                    match *base {
+                        Type::Bool | Type::Int(..) | Type::Float(..) => {}
+                        _ => return Err(BuilderError::NonScalarVectorType(*base)),
                     }
 
                     instr_types.push(Instruction::Core(
                         core_instruction::Instruction::OpTypeVector(
                             core_instruction::OpTypeVector(
                                 id,
-                                self.define_type(&*ty),
-                                LiteralInteger(len),
+                                self.define_type(&*base),
+                                LiteralInteger(components),
                             )
                         )
                     ));
+                }
+
+                Type::Matrix{base, rows, cols} => {
+                    if rows < 2 || cols < 2 {
+                        return Err(BuilderError::InvalidMatrixDimensions(rows, cols));
+                    }
+
+                    match *base {
+                        Type::Bool | Type::Int(..) | Type::Float(..) => {}
+                        _ => return Err(BuilderError::NonScalarVectorType(*base)),
+                    }
+
+                    instr_types.push(
+                        core_instruction::OpTypeMatrix(
+                            id,
+                            self.define_type(&Type::Vector{ base: base, components: rows }),
+                            LiteralInteger(cols),
+                        ).into()
+                    );
                 }
 
                 Type::Struct(tys) => {
@@ -633,29 +653,28 @@ impl ModuleBuilder {
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
         // Ensure that subtypes of aggregate types are defined BEFORE the actual aggregate type definition
-        match ty {
-            &Type::Pointer(ref ty, _) => {
+        match *ty {
+            Type::Pointer(ref ty, _) => {
                 self.define_type(&*ty);
-            },
-
-            &Type::Function(ref ret_ty, ref params) => {
+            }
+            Type::Function(ref ret_ty, ref params) => {
                 self.define_type(&ret_ty);
                 for ty in params {
                     self.define_type(&ty);
                 }
-            },
-
-            &Type::Struct(ref tys) => {
+            }
+            Type::Struct(ref tys) => {
                 for ty in tys {
                     self.define_type(&ty);
                 }
-            },
-
-            &Type::Vector(ref ty, _) => {
-                self.define_type(&*ty);
-            },
-
-            _ => (),
+            }
+            Type::Vector{ ref base, .. } => {
+                self.define_type(&*base);
+            }
+            Type::Matrix{ ref base, rows, .. } => {
+                self.define_type(&Type::Vector{ base: base.clone(), components: rows});
+            }
+            _ => {}
         }
 
         if let Some(id) = self.types.get(ty) {
@@ -794,4 +813,5 @@ pub enum BuilderError {
     GlobalFunctionVariable,
     NonScalarVectorType(Type),
     InvalidVectorComponentCount(u32),
+    InvalidMatrixDimensions(u32, u32),
 }
