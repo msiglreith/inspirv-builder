@@ -4,7 +4,7 @@ use inspirv::instruction::{BranchInstruction, Instruction};
 use inspirv::core::enumeration::FunctionControl;
 use module::Type;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FuncId(pub Id);
 
 pub struct FunctionDecl {

@@ -93,7 +93,7 @@ pub struct ModuleBuilder {
     memory_model: (AddressingModel, MemoryModel),
     entry_points: HashMap<(String, ExecutionModel), EntryPoint>,
     func_decls: Vec<()>,
-    func_defs: Vec<Function>,
+    func_defs: HashMap<FuncId, Function>,
     types: LinkedHashMap<Type, Id>,
     global_vars: HashMap<(String, StorageClass), Variable>,
     consts: HashMap<ConstValue, Id>,
@@ -364,7 +364,7 @@ impl ModuleBuilder {
 
         // 11. All function definitions (functions with a body)
         let mut instr_funcs = Vec::new();
-        for func in self.func_defs.clone() {
+        for (_, func) in self.func_defs.clone() {
             // Function begin
             let ret_ty = self.define_type(&func.ret_ty);
             let func_ty = self.define_type(&Type::Function(Box::new(func.ret_ty), func.params.iter().map(|param| param.ty.clone() ).collect()));
@@ -755,7 +755,11 @@ impl ModuleBuilder {
     }
 
     pub fn push_function(&mut self, func: Function) {
-        self.func_defs.push(func);
+        self.func_defs.insert(func.id, func);
+    }
+
+    pub fn get_function(&self, id: FuncId) -> Option<&Function> {
+        self.func_defs.get(&id)
     }
 
     pub fn define_variable(&mut self, name: &str, ty: Type, storage: StorageClass) -> Id {  
