@@ -1,7 +1,9 @@
 
-use inspirv::types::Id;
+use inspirv::types::{Id, LiteralInteger};
 use inspirv::instruction::{BranchInstruction, Instruction};
 use inspirv::core::enumeration::FunctionControl;
+use inspirv::core::instruction::OpExtInst;
+use inspirv::glsl::instruction as glsl;
 use module::Type;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +24,11 @@ pub struct Block {
 impl Block {
     pub fn emit_instruction<T: Into<Instruction>>(&mut self, instruction: T) {
         self.instructions.push(instruction.into());
+    }
+
+    // TODO: automatically import GLSL extension on call
+    pub fn emit_glsl_instruction(&mut self, ext: Id, op: glsl::OpCode, result_id: Id, result_ty: Id, operands: Vec<Id>) {
+        self.emit_instruction(OpExtInst(result_ty, result_id, ext, LiteralInteger(op as u32), operands));
     }
 }
 
