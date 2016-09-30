@@ -99,6 +99,7 @@ pub struct ModuleBuilder {
     consts: HashMap<ConstValue, Id>,
     consts_float: Vec<(ConstValueFloat, Id)>, // floats doesn't support Eq/Hash /shrug
     consts_composite: HashMap<(Type, Vec<Id>), Id>,
+    ext_imports: HashMap<String, Id>,
 
     // debug annotations
     source: Option<(SourceLanguage, LiteralInteger)>,
@@ -129,6 +130,7 @@ impl ModuleBuilder {
             id_names: Default::default(),
             member_names: Default::default(),
             decorations: Default::default(),
+            ext_imports: Default::default(),
 
             cur_id: 1,
         }
@@ -143,6 +145,15 @@ impl ModuleBuilder {
         // 2. Optional `OpExtension` instructions (extensions to SPIR-V)
 
         // 3. Optional `OpExtInstImport` instructions
+        let mut instr_ext_import = Vec::new();
+        for (name, id) in &self.ext_imports {
+            instr_ext_import.push(
+                core_instruction::OpExtInstImport(
+                    *id,
+                    LiteralString(name.clone()),
+                ).into()
+            );
+        }
 
         // 4. The single required `OpMemoryModel` instruction
         let instr_memory = Instruction::Core(
@@ -592,6 +603,7 @@ impl ModuleBuilder {
  
         // Merge everything together in correct order except capabilities
         let mut instructions = Vec::new();
+        instructions.extend(instr_ext_import); // 3.
         instructions.push(instr_memory); // 4.
         instructions.extend(instr_entry); // 5./6.
         instructions.extend(instr_debug); // 7.
@@ -649,6 +661,17 @@ impl ModuleBuilder {
 
     pub fn add_decoration(&mut self, id: Id, decoration: Decoration) {
         self.decorations.insert((id, decoration));
+    }
+
+    pub fn import_extension(&mut self, name: &str) -> Id {
+        if let Some(id) = self.ext_imports.get(name) {
+            return *id;
+        }
+
+        let id = Id(self.cur_id);
+        self.cur_id += 1;
+        self.ext_imports.insert(name.into(), id);
+        id
     }
 
     pub fn define_type(&mut self, ty: &Type) -> Id {
