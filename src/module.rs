@@ -31,6 +31,46 @@ pub enum Type {
     Struct(Vec<Type>),
 }
 
+impl Type {
+    // TODO: matrix must differ between row and coloumn major
+    pub fn alignment(&self) -> usize {
+        use self::Type::*;
+        match *self {
+            Bool => 4,
+            Int(bit_width, _) | Float(bit_width) => (7+bit_width as usize)/8,
+            Vector { ref base, components } => {
+                let base_size = base.size_of();
+                let mult = if components == 3 { 4 } else { components } as usize;
+                base_size * mult
+            }
+            Matrix { ref base, rows, cols } => {
+                let base_size = base.size_of();
+                base_size * rows as usize * cols as usize
+            }
+
+            _ => panic!("Currently unsupported alignment"),
+        }
+    }
+
+    pub fn size_of(&self) -> usize {
+        use self::Type::*;
+        match *self {
+            Bool => 4,
+            Int(bit_width, _) | Float(bit_width) => (7+bit_width as usize)/8,
+            Vector { ref base, components } => {
+                let base_size = base.size_of();
+                base_size * components as usize
+            }
+            Matrix { ref base, rows, cols } => {
+                let base_size = base.size_of();
+                base_size * rows as usize * cols as usize
+            }
+
+            _ => panic!("Currently unsupported size_of"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ConstValue {
     Bool(bool),
@@ -107,6 +147,7 @@ pub struct ModuleBuilder {
     member_names: HashMap<(Id, u32), String>,
 
     decorations: HashSet<(Id, Decoration)>,
+    decorations_member: HashSet<(Id, u32, Decoration)>,
 
     cur_id: u32,
 }
@@ -130,6 +171,7 @@ impl ModuleBuilder {
             id_names: Default::default(),
             member_names: Default::default(),
             decorations: Default::default(),
+            decorations_member: Default::default(),
             ext_imports: Default::default(),
 
             cur_id: 1,
@@ -226,6 +268,16 @@ impl ModuleBuilder {
             instr_annotation.push(
                 core_instruction::OpDecorate(
                     id,
+                    decoration.clone(),
+                ).into()
+            );
+        }
+
+        for &(id, member, ref decoration) in &self.decorations_member {
+            instr_annotation.push(
+                core_instruction::OpMemberDecorate(
+                    id,
+                    LiteralInteger(member),
                     decoration.clone(),
                 ).into()
             );
@@ -659,8 +711,16 @@ impl ModuleBuilder {
         self.id_names.entry(id).or_insert(name.to_string());
     }
 
+    pub fn name_id_member(&mut self, id: Id, member: u32, name: &str) {
+        self.member_names.entry((id, member)).or_insert(name.to_string());
+    }
+
     pub fn add_decoration(&mut self, id: Id, decoration: Decoration) {
         self.decorations.insert((id, decoration));
+    }
+
+    pub fn add_decoration_member(&mut self, id: Id, member: u32, decoration: Decoration) {
+        self.decorations_member.insert((id, member, decoration));
     }
 
     pub fn import_extension(&mut self, name: &str) -> Id {
