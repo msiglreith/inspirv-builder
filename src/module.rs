@@ -430,7 +430,12 @@ impl ModuleBuilder {
         for (_, func) in self.func_defs.clone() {
             // Function begin
             let ret_ty = self.define_type(&func.ret_ty);
-            let func_ty = self.define_type(&Type::Function(Box::new(func.ret_ty), func.params.iter().map(|param| param.ty.clone() ).collect()));
+            let func_ty = self.define_type(&Type::Function(
+                Box::new(func.ret_ty),
+                func.params.iter().map(
+                    |param| Type::Pointer(Box::new(param.ty.clone()), StorageClass::StorageClassFunction) 
+                ).collect())
+            );
 
             instr_funcs.push(
                 Instruction::Core(core_instruction::Instruction::OpFunction(
@@ -439,7 +444,7 @@ impl ModuleBuilder {
             );
 
             for parameter in func.params {
-                let ty_id = self.define_type(&parameter.ty);
+                let ty_id = self.define_type(&Type::Pointer(Box::new(parameter.ty), StorageClass::StorageClassFunction));
                 instr_funcs.push(
                     Instruction::Core(core_instruction::Instruction::OpFunctionParameter(
                         core_instruction::OpFunctionParameter(ty_id, parameter.id)
