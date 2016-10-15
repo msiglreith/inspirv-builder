@@ -4,8 +4,9 @@ version = "0.1.0"
 authors = ["msiglreith <msiglreith@users.noreply.github.com>"]
 
 [dependencies]
-inspirv = { git = "https://github.com/msiglreith/inspirv", branch = "master" }
+inspirv = { path = "../inspirv", version = "0.1.0" }
 linked-hash-map = "0.2.1"
+petgraph = "0.3.2"
 
 [[example]]
 name = "export"

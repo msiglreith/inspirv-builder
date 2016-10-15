@@ -15,9 +15,19 @@ pub struct FunctionDecl {
 }
 
 #[derive(Clone, Debug)]
+pub enum CfgStructure {
+    Selection(Id),
+    Loop {
+        merge: Id,
+        cont: Id,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct Block {
     pub label: Id,
     pub branch_instr: Option<BranchInstruction>, // needs to be set on build
+    pub cfg_structure: Option<CfgStructure>,
     pub instructions: Vec<Instruction>, // some checks to avoid illegal instructions might be interesting for the future
 }
 
@@ -66,6 +76,7 @@ impl Function {
         let block = Block {
             label: label,
             branch_instr: None,
+            cfg_structure: None,
             instructions: Vec::new(),
         };
 

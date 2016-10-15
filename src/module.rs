@@ -13,6 +13,7 @@ use inspirv::core::enumeration::*;
 use inspirv::core::instruction as core_instruction;
 use linked_hash_map::LinkedHashMap;
 use function::{FuncId, Function};
+use cfg;
 
 const INSPIRV_BUILDER_ID: u32 = 0xCC; // TODO: might be able to get an official value in the future (:?
 
@@ -27,7 +28,7 @@ pub enum Type {
     FixedArray(Box<Type>, u32),
     Pointer(Box<Type>, StorageClass),
     Vector{ base: Box<Type>, components: u32},
-    Matrix{ base: Box<Type>, rows: u32, cols: u32 },
+    Matrix{ base: Box<Type>, rows: u32, cols: u32 }, // column major!
     Struct(Vec<Type>),
 }
 
@@ -45,7 +46,8 @@ impl Type {
             }
             Matrix { ref base, rows, cols } => {
                 let base_size = base.size_of();
-                base_size * rows as usize * cols as usize
+                let vec_align = if rows == 3 { 4 } else { rows } as usize;
+                base_size * vec_align as usize * cols as usize
             }
 
             _ => panic!("Currently unsupported alignment"),
@@ -63,7 +65,8 @@ impl Type {
             }
             Matrix { ref base, rows, cols } => {
                 let base_size = base.size_of();
-                base_size * rows as usize * cols as usize
+                let vec_size = if rows == 3 { 4 } else { rows } as usize;
+                base_size * vec_size as usize * cols as usize
             }
 
             _ => panic!("Currently unsupported size_of"),
@@ -491,6 +494,22 @@ impl ModuleBuilder {
                 );
 
                 instr_funcs.extend(block.instructions);
+
+                if let Some(cfg_structure) = block.cfg_structure {
+                    use function::CfgStructure::*;
+                    match cfg_structure {
+                        Selection(merge) => {
+                            instr_funcs.push(core_instruction::OpSelectionMerge(merge, SelectionControlNone).into());
+                        }
+                        Loop { merge, cont } => {
+                            let loop_control = LoopControl {
+                                bits: LoopControlNone,
+                                values: HashMap::new(),
+                            };
+                            instr_funcs.push(core_instruction::OpLoopMerge(merge, cont, loop_control).into());
+                        }
+                    }
+                }
 
                 // A block always ends with a branch instruction
                 instr_funcs.push(Instruction::from(block.branch_instr.unwrap()));
