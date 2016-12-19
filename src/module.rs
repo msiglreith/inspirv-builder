@@ -1,7 +1,7 @@
 
 use std::mem::transmute;
 use std::collections::{HashSet, HashMap};
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{Entry, Iter};
 use std::result;
 use std::io;
 use std::io::Write;
@@ -867,6 +867,10 @@ impl ModuleBuilder {
 
     pub fn get_function(&self, id: FuncId) -> Option<&Function> {
         self.func_defs.get(&id)
+    }
+
+    pub fn iter_functions(&self) -> Iter<FuncId, Function> {
+        self.func_defs.iter()
     }
 
     pub fn define_variable(&mut self, name: &str, ty: Type, storage: StorageClass) -> Id {  
