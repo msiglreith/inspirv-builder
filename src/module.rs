@@ -869,6 +869,10 @@ impl ModuleBuilder {
         self.func_defs.get(&id)
     }
 
+    pub fn get_function_mut(&mut self, id: FuncId) -> Option<&mut Function> {
+        self.func_defs.get_mut(&id)
+    }
+
     pub fn iter_functions(&self) -> Iter<FuncId, Function> {
         self.func_defs.iter()
     }
@@ -897,15 +901,15 @@ impl ModuleBuilder {
 
     pub fn define_entry_point(
         &mut self,
+        id: FuncId,
         name: &str,
         execution_model: ExecutionModel,
         execution_modes: HashMap<ExecutionModeKind, ExecutionMode>,
         interfaces: Vec<Id>,
-    ) -> result::Result<Function, BuilderError> {
-        let function = self.define_function_named(name);
+    ) -> result::Result<(), BuilderError> {
         let entry_point = EntryPoint {
             execution_modes: execution_modes,
-            func_id: function.id,
+            func_id: id,
             interfaces: interfaces,
         };
 
@@ -913,8 +917,9 @@ impl ModuleBuilder {
             return Err(BuilderError::EntryPointAlreadyDefined(name.to_string(), execution_model));
         }
 
+        self.name_id(id.0, name);
         self.entry_points.insert((name.to_string(), execution_model), entry_point);
-        Ok(function)
+        Ok(())
     }
 }
 

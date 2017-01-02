@@ -72,15 +72,7 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn add_block(&mut self, label: Id) -> &mut Block {
-        let block = Block {
-            label: label,
-            branch_instr: None,
-            cfg_structure: None,
-            instructions: Vec::new(),
-        };
-
+    pub fn add_block(&mut self, block: Block) {
         self.blocks.push(block);
-        self.blocks.last_mut().unwrap()
     }
 }
